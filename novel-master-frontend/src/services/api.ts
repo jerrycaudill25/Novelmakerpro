@@ -1,38 +1,38 @@
-import axios from 'axios';
+import axios, { AxiosInstance, AxiosError } from 'axios'
+import { ApiResponse } from '../types'
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'
 
-export const api = axios.create({
-  baseURL: API_BASE_URL,
-  timeout: 30000,
+const api: AxiosInstance = axios.create({
+  baseURL: `${API_BASE_URL}/api`,
+  timeout: parseInt(import.meta.env.VITE_API_TIMEOUT || '30000'),
   headers: {
-    'Content-Type': 'application/json',
-  },
-});
+    'Content-Type': 'application/json'
+  }
+})
 
-// Attach JWT token to every request
+// Request interceptor
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('nm_token');
+    const token = localStorage.getItem('authToken')
     if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
+      config.headers.Authorization = `Bearer ${token}`
     }
-    return config;
+    return config
   },
   (error) => Promise.reject(error)
-);
+)
 
+// Response interceptor
 api.interceptors.response.use(
-  (response) => response,
-  (error) => {
+  (response) => response.data,
+  (error: AxiosError<ApiResponse>) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem('nm_token');
-      window.location.href = '/auth';
+      localStorage.removeItem('authToken')
+      window.location.href = '/login'
     }
-    console.error('API ERROR:', error?.response || error.message);
-    return Promise.reject(error);
+    return Promise.reject(error.response?.data || error)
   }
-);
+)
 
-export default api;
+export default api

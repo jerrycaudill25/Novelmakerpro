@@ -1,5 +1,15 @@
 {
-  "dependencies": {
-    "@tanstack/react-query": "^5.100.14"
-  }
+  "name": "novelmakerpro",
+  "version": "1.0.0",
+  "description": "AI-enhanced novel writing platform",
+  "private": true,
+  "scripts": {
+    "dev": "cd novel-master-frontend && npm run dev",
+    "build": "cd novel-master-frontend && npm run build",
+    "preview": "cd novel-master-frontend && npm run preview",
+    "install-all": "npm install && cd novel-master-frontend && npm install && cd ../novel-master && npm install"
+  },
+  "keywords": ["novel", "writing", "ai", "typescript", "react"],
+  "author": "",
+  "license": "ISC"
 }
