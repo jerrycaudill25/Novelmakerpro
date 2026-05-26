@@ -7,9 +7,15 @@
     "dev": "cd novel-master-frontend && npm run dev",
     "build": "cd novel-master-frontend && npm run build",
     "preview": "cd novel-master-frontend && npm run preview",
-    "install-all": "npm install && cd novel-master-frontend && npm install && cd ../novel-master && npm install"
+    "install-all": "npm install && cd novel-master-frontend && npm install"
   },
-  "keywords": ["novel", "writing", "ai", "typescript", "react"],
+  "keywords": [
+    "novel",
+    "writing",
+    "ai",
+    "typescript",
+    "react"
+  ],
   "author": "",
   "license": "ISC"
 }

@@ -1,54 +1,39 @@
 import { create } from 'zustand'
-import { User, Novel } from '../types'
+import { User, Novel } from '../types/index'
 
 interface AppStore {
-  // User state
   user: User | null
-  isAuthenticated: boolean
-  setUser: (user: User | null) => void
-  logout: () => void
-
-  // Novels state
   novels: Novel[]
-  currentNovel: Novel | null
-  setNovels: (novels: Novel[]) => void
-  setCurrentNovel: (novel: Novel | null) => void
-  addNovel: (novel: Novel) => void
-  updateNovel: (novel: Novel) => void
-  deleteNovel: (id: string) => void
-
-  // UI state
   isLoading: boolean
   error: string | null
+  setUser: (user: User | null) => void
+  setNovels: (novels: Novel[]) => void
+  addNovel: (novel: Novel) => void
+  updateNovel: (id: string, novel: Partial<Novel>) => void
+  deleteNovel: (id: string) => void
   setIsLoading: (loading: boolean) => void
   setError: (error: string | null) => void
 }
 
-export const useAppStore = create<AppStore>((set) => ({
-  // User
+export const useStore = create<AppStore>((set) => ({
   user: null,
-  isAuthenticated: false,
-  setUser: (user) => set({ user, isAuthenticated: !!user }),
-  logout: () => set({ user: null, isAuthenticated: false }),
-
-  // Novels
   novels: [],
-  currentNovel: null,
-  setNovels: (novels) => set({ novels }),
-  setCurrentNovel: (novel) => set({ currentNovel: novel }),
-  addNovel: (novel) => set((state) => ({ novels: [...state.novels, novel] })),
-  updateNovel: (novel) => set((state) => ({
-    novels: state.novels.map((n) => (n.id === novel.id ? novel : n)),
-    currentNovel: state.currentNovel?.id === novel.id ? novel : state.currentNovel
-  })),
-  deleteNovel: (id) => set((state) => ({
-    novels: state.novels.filter((n) => n.id !== id),
-    currentNovel: state.currentNovel?.id === id ? null : state.currentNovel
-  })),
-
-  // UI
   isLoading: false,
   error: null,
-  setIsLoading: (isLoading) => set({ isLoading }),
-  setError: (error) => set({ error })
+  setUser: (user) => set({ user }),
+  setNovels: (novels) => set({ novels }),
+  addNovel: (novel) =>
+    set((state) => ({ novels: [...state.novels, novel] })),
+  updateNovel: (id, updates) =>
+    set((state) => ({
+      novels: state.novels.map((n) =>
+        n.id === id ? { ...n, ...updates } : n
+      ),
+    })),
+  deleteNovel: (id) =>
+    set((state) => ({
+      novels: state.novels.filter((n) => n.id !== id),
+    })),
+  setIsLoading: (loading) => set({ isLoading: loading }),
+  setError: (error) => set({ error }),
 }))

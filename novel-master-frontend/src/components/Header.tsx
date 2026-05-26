@@ -1,49 +1,54 @@
-import { Link } from 'react-router-dom'
-import { useAppStore } from '../store'
+import React from 'react'
+import { useStore } from '../store/index'
+import { LogOut, Menu } from 'lucide-react'
 
-export default function Header() {
-  const { user, logout } = useAppStore()
+export const Header: React.FC = () => {
+  const { user, setUser } = useStore()
+  const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false)
+
+  const handleLogout = () => {
+    setUser(null)
+    localStorage.removeItem('token')
+  }
 
   return (
-    <header className="bg-gradient-to-r from-slate-900 to-slate-800 border-b border-slate-700">
-      <nav className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-        <div className="flex justify-between items-center">
-          <Link to="/" className="flex items-center space-x-2">
-            <div className="w-8 h-8 bg-gradient-to-br from-indigo-400 to-purple-600 rounded"></div>
-            <span className="text-xl font-bold text-white">NovelMaster</span>
-          </Link>
-
-          <div className="flex items-center space-x-4">
+    <header className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-lg">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="flex justify-between items-center h-16">
+          <div className="flex items-center">
+            <h1 className="text-2xl font-bold">Novel Master</h1>
+          </div>
+          <nav className="hidden md:flex items-center gap-8">
             {user ? (
               <>
-                <Link to="/novels" className="text-slate-300 hover:text-white transition">
-                  My Novels
-                </Link>
-                <span className="text-slate-400">|</span>
-                <span className="text-slate-300">{user.name}</span>
+                <span className="text-sm">Welcome, {user.username}</span>
                 <button
-                  onClick={logout}
-                  className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded transition"
+                  onClick={handleLogout}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-white bg-opacity-20 hover:bg-opacity-30 transition"
                 >
+                  <LogOut size={18} />
                   Logout
                 </button>
               </>
             ) : (
               <>
-                <Link to="/login" className="text-slate-300 hover:text-white transition">
+                <a href="/login" className="hover:text-opacity-80">
                   Login
-                </Link>
-                <Link
-                  to="/register"
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded transition"
-                >
+                </a>
+                <a href="/signup" className="px-4 py-2 bg-white text-indigo-600 rounded-lg hover:bg-opacity-90">
                   Sign Up
-                </Link>
+                </a>
               </>
             )}
-          </div>
+          </nav>
+          <button
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            className="md:hidden"
+          >
+            <Menu size={24} />
+          </button>
         </div>
-      </nav>
+      </div>
     </header>
   )
 }

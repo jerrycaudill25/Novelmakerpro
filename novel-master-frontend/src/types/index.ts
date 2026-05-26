@@ -1,7 +1,7 @@
 export interface User {
   id: string
+  username: string
   email: string
-  name: string
   createdAt: string
 }
 
@@ -13,6 +13,7 @@ export interface Novel {
   chapters: Chapter[]
   createdAt: string
   updatedAt: string
+  status: 'draft' | 'published' | 'archived'
 }
 
 export interface Chapter {
@@ -20,12 +21,12 @@ export interface Chapter {
   novelId: string
   title: string
   content: string
-  order: number
+  wordCount: number
   createdAt: string
   updatedAt: string
 }
 
-export interface ApiResponse<T = any> {
+export interface ApiResponse<T> {
   success: boolean
   data?: T
   error?: string
