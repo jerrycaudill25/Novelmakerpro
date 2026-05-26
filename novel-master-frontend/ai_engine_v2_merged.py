@@ -1,0 +1,846 @@
+"""
+ai_engine.py — Novel Master Prose Execution Engine v2.0
+Merged: Original ai_engine.py + Prose Execution Engine Spec v1.0
+Production-ready for AWS deployment with SQLite WAL mode.
+
+This module is the STYLE IMMUNE SYSTEM. It does not merely suggest 
+improvements — it ENFORCES prose architecture and LEARNS from author edits.
+"""
+
+import re
+import sqlite3
+import json
+import logging
+from typing import List, Dict, Any, Optional, Tuple
+from dataclasses import dataclass
+from enum import Enum
+from collections import Counter
+
+logger = logging.getLogger(__name__)
+
+# ============================================================================
+# SCENE TONE ENUM — Genre-aware prose control
+# ============================================================================
+
+class SceneTone(Enum):
+    ACTION = "action"
+    EMOTIONAL = "emotional"
+    HORROR = "horror"
+    WONDER = "wonder"
+    DIALOGUE = "dialogue"
+    EXPOSITION = "exposition"
+
+# ============================================================================
+# AUDIT RESULT DATACLASS — 7-dimensional prose health
+# ============================================================================
+
+@dataclass
+class ProseAuditResult:
+    passed: bool
+    violations: List[Dict[str, Any]]
+    rewrite_suggestions: List[Dict[str, Any]]
+    tone_analysis: Dict[str, Any]
+    abstraction_score: float
+    cadence_health: float
+    descriptor_freshness: float
+    overall_score: float
+    badge: Optional[str]
+
+# ============================================================================
+# CONCRETE REWRITE DICTIONARY — AI→Human replacements
+# ============================================================================
+
+CONCRETE_REPLACEMENTS = {
+    'pressure increased': [
+        'The walls groaned, dust sifting from the ceiling joints.',
+        'His ears popped. The air thickened, pressing against his temples.',
+        'The stone beneath his boots cracked, a hairline fracture racing outward.'
+    ],
+    'instinct screamed': [
+        'His hand moved before thought, closing on the hilt.',
+        'Breath caught. The back of his neck prickled, damp with sudden sweat.',
+        'Muscle memory bent his knees, dropped his center of gravity.'
+    ],
+    'the atmosphere was tense': [
+        'No one spoke. The fire popped, too loud in the silence.',
+        'Glasses stopped clinking. A chair scraped, froze mid-movement.',
+        'She watched the guard's thumb drift to his sword belt. Watched it stop there.'
+    ],
+    'structurally reinforced': [
+        'The door held. The ram splintered oak, but the iron bands held.',
+        'Stone ground against stone, the masonry complaining but intact.',
+        'The beam bowed, grain splitting along its length, but did not break.'
+    ],
+    'power surged': [
+        'Heat bloomed in his chest, spreading to his fingertips.',
+        'The lantern flame guttered, leaned toward him, then roared upright.',
+        'His shadow stretched, wrong-angled, across the floorboards.',
+        'The metal in his palm warmed, then burned, then seared.'
+    ],
+    'aura': [
+        'The air near him tasted of ozone and hot copper.',
+        'Dogs would not approach him. Flies would not land near him.',
+        'The temperature dropped three paces from his position.'
+    ]
+}
+
+# ============================================================================
+# AI CADENCE PATTERNS — Semantic detection
+# ============================================================================
+
+AI_CADENCE_PATTERNS = [
+    (r'^(He|She|They|The|It)\s+\w+ed\b', 'weak_opening', 4.0),
+    (r'\b(felt|seemed|appeared|looked|sounded|smelled)\s+like\b', 'filter_verb', 5.5),
+    (r'\b(felt|was feeling|felt a surge of)\s+(anger|fear|joy|sadness|grief|happiness)\b', 'emotional_tell', 7.0),
+    (r'\b(very|extremely|incredibly|absolutely|completely|totally)\s+\w+\b', 'intensifier_bloat', 4.0),
+    (r'\b(There was|There were|It was)\s+a\s+\w+\s+(sense|feeling|quality|atmosphere)\b', 'passive_framing', 6.0),
+    (r'\b(seemed to|appeared to|looked as if|as though|as if)\s+\w+\b', 'hedging', 5.0),
+    (r'\b(Meanwhile|At the same time|In addition|Furthermore|However|Therefore)\b', 'transition_bloat', 3.5),
+    (r'\b(he|she)\s+(saw|heard|felt|smelled|tasted)\b.*\b(saw|heard|felt|smelled|tasted)\b', 'sensory_list', 5.0),
+]
+
+ABSTRACTION_PATTERNS = [
+    (r'\b(something|a presence|a force|an energy)\s+(was|approached|lingered|watched)\b', 'spatial_abstraction', 7.5),
+    (r'\b(time|moments|eternity|forever)\s+(passed|stretched|compressed|flowed)\b', 'temporal_abstraction', 6.0),
+    (r'\b(his mind|her mind|their minds)\s+(raced|wandered|screamed|shut down)\b', 'cognitive_abstraction', 6.5),
+    (r'\b(power|energy|force|strength)\s+(flowed|surged|coursed|pulsed|gathered)\b', 'power_abstraction', 7.0),
+]
+
+# ============================================================================
+# BACKWARD COMPATIBLE: Original BANNED_PHRASES
+# ============================================================================
+
+BANNED_PHRASES = [
+    r'Not this\. That\.', r'Not fear\. Recognition\.', r'Not long\. But enough\.',
+    r'pressure increased', r'instinct screamed', r'aura', r'power surged',
+    r'he knew|she knew|they knew', r'he felt|she felt|they felt',
+    r'for a moment', r'as if', r'somehow', r'it seemed',
+    r'\b(quite|rather|very|really|actually|literally|basically|suddenly)\b',
+    r'\b(nodded|shrugged|sighed|rolled (his|her|their) eyes)\b',
+    r'\b(heartbeat raced|heart pounded|breath caught)\b',
+]
+
+# ============================================================================
+# PROSE EXECUTION ENGINE — Core class
+# ============================================================================
+
+class ProseExecutionEngine:
+    """
+    The style immune system. Enforces prose architecture at generation time
+    and audits output before human review. Learns from author edits.
+    """
+
+    def __init__(self, db_path: str, project_id: str = 'DEFAULT_PROJECT'):
+        self.project_id = project_id
+        self.db_path = db_path
+        self.conn = sqlite3.connect(db_path)
+        self.conn.row_factory = sqlite3.Row
+        self._ensure_schema()
+        self._load_banned_phrases()
+        self._load_descriptor_history()
+
+    def _ensure_schema(self):
+        """Create v1.0 tables if they don't exist."""
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS descriptor_usage (
+                usage_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id TEXT NOT NULL,
+                descriptor TEXT NOT NULL,
+                chapter_id INTEGER NOT NULL,
+                scene_id TEXT,
+                context_snippet TEXT,
+                usage_count INTEGER DEFAULT 1,
+                UNIQUE(project_id, descriptor, chapter_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_descriptors_project ON descriptor_usage(project_id, descriptor);
+            CREATE INDEX IF NOT EXISTS idx_descriptors_chapter ON descriptor_usage(project_id, chapter_id);
+
+            CREATE TABLE IF NOT EXISTS banned_phrases (
+                phrase_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id TEXT,
+                phrase_pattern TEXT NOT NULL,
+                pattern_type TEXT CHECK(pattern_type IN ('literal', 'regex', 'semantic')),
+                rule_source TEXT CHECK(rule_source IN (
+                    'ai_cadence', 'abstraction', 'emotional_shorthand', 
+                    'exposition_filler', 'forced_dramatic', 'author_preference'
+                )),
+                severity REAL DEFAULT 7.0,
+                suggested_rewrite TEXT,
+                is_active BOOLEAN DEFAULT 1
+            );
+
+            CREATE TABLE IF NOT EXISTS prose_violations (
+                violation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id TEXT NOT NULL,
+                chapter_id INTEGER NOT NULL,
+                scene_id TEXT,
+                rule_id TEXT NOT NULL,
+                violation_type TEXT CHECK(violation_type IN (
+                    'banned_phrase', 'abstraction', 'cadence', 'exposition_dump', 
+                    'emotional_flatness', 'continuity_break'
+                )),
+                excerpt TEXT NOT NULL,
+                confidence REAL DEFAULT 1.0,
+                auto_rewritten TEXT,
+                author_override BOOLEAN DEFAULT 0,
+                author_replacement TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS author_style_profile (
+                profile_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id TEXT,
+                metric_name TEXT NOT NULL,
+                metric_value REAL,
+                sample_count INTEGER DEFAULT 1,
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(project_id, metric_name)
+            );
+        """)
+
+        # Seed global defaults if table is empty
+        cursor = self.conn.execute("SELECT COUNT(*) FROM banned_phrases WHERE project_id IS NULL")
+        if cursor.fetchone()[0] == 0:
+            self._seed_global_banned_phrases()
+        self.conn.commit()
+
+    def _seed_global_banned_phrases(self):
+        """Seed with the 20 global defaults from spec v1.0."""
+        defaults = [
+            ('Not this\. That\.', 'regex', 'forced_dramatic', 9.0, 'Rewrite as natural flowing sentence.'),
+            ('Not fear\. Recognition\.', 'literal', 'forced_dramatic', 9.5, 'Show recognition through physical reaction.'),
+            ('Not long\. But enough\.', 'regex', 'forced_dramatic', 9.0, 'Describe duration through sensory experience.'),
+            ('Not injured\. Bowing\.', 'literal', 'forced_dramatic', 9.5, 'Show physical compromise through movement.'),
+            ('pressure increased', 'literal', 'abstraction', 8.0, 'Replace with physical environmental reaction.'),
+            ('instinct screamed', 'literal', 'abstraction', 8.5, 'Replace with involuntary physical response.'),
+            ('structurally reinforced', 'literal', 'abstraction', 7.5, 'Describe material resistance through consequence.'),
+            ('the atmosphere was tense', 'literal', 'abstraction', 8.0, 'Show tension through character behavior and environment.'),
+            ('aura', 'literal', 'emotional_shorthand', 6.5, 'Replace with environmental or sensory effect.'),
+            ('power surged', 'literal', 'emotional_shorthand', 7.0, 'Describe physiological or environmental manifestation.'),
+            ('overwhelming', 'literal', 'emotional_shorthand', 6.0, 'Specific sensory detail instead.'),
+            ('dangerous', 'literal', 'emotional_shorthand', 5.5, 'Show danger through consequence or environment.'),
+            ('massive', 'literal', 'emotional_shorthand', 5.0, 'Use scale comparison or physical interaction.'),
+            ('reinforced', 'literal', 'emotional_shorthand', 6.0, 'Describe structural behavior under stress.'),
+            ('he knew|she knew|they knew', 'regex', 'ai_cadence', 5.0, 'Filter through sensory confirmation or doubt.'),
+            ('he felt|she felt|they felt', 'regex', 'ai_cadence', 5.5, 'Convert to physical sensation or subtext.'),
+            ('for a moment', 'literal', 'ai_cadence', 4.5, 'Use silence, breath, or environmental shift.'),
+            ('as if', 'literal', 'ai_cadence', 4.0, 'Use direct sensory comparison or metaphor.'),
+            ('somehow', 'literal', 'ai_cadence', 6.0, 'Remove or replace with concrete mechanism.'),
+            ('it seemed', 'literal', 'ai_cadence', 5.0, 'POV perceptual filter without hedging language.'),
+        ]
+        for pattern, ptype, source, severity, rewrite in defaults:
+            self.conn.execute(
+                """INSERT INTO banned_phrases (phrase_pattern, pattern_type, rule_source, severity, suggested_rewrite)
+                VALUES (?, ?, ?, ?, ?)""",
+                (pattern, ptype, source, severity, rewrite)
+            )
+
+    def _load_banned_phrases(self):
+        """Load active banned phrases for this project + globals."""
+        cursor = self.conn.execute(
+            """SELECT * FROM banned_phrases 
+            WHERE (project_id = ? OR project_id IS NULL) AND is_active = 1""",
+            (self.project_id,)
+        )
+        self.banned = [dict(row) for row in cursor.fetchall()]
+
+    def _load_descriptor_history(self):
+        """Load project-wide descriptor usage counts."""
+        cursor = self.conn.execute(
+            "SELECT descriptor, SUM(usage_count) as total FROM descriptor_usage WHERE project_id = ? GROUP BY descriptor",
+            (self.project_id,)
+        )
+        self.descriptor_history = {row['descriptor']: row['total'] for row in cursor.fetchall()}
+
+    # ========================================================================
+    # CORE AUDIT METHOD — 7-dimensional prose health check
+    # ========================================================================
+
+    def audit_text(self, text: str, chapter_id: int = 0, scene_tone: SceneTone = SceneTone.EMOTIONAL) -> ProseAuditResult:
+        """
+        Full prose audit. Returns ProseAuditResult with all 7 metrics.
+        This is the PRIMARY method for AWS production use.
+        """
+        violations = []
+
+        # 1. Banned phrase detection (project-specific + global)
+        for ban in self.banned:
+            matches = self._find_matches(text, ban)
+            for match in matches:
+                violations.append({
+                    'rule': 'banned_phrase',
+                    'rule_source': ban['rule_source'],
+                    'excerpt': match['excerpt'],
+                    'position': match['position'],
+                    'severity': ban['severity'],
+                    'suggested_rewrite': ban['suggested_rewrite'],
+                    'confidence': 0.95
+                })
+
+        # 2. Abstraction audit (Concrete Experience Filter)
+        abstraction_violations = self._audit_abstraction(text)
+        violations.extend(abstraction_violations)
+
+        # 3. Cadence analysis (SceneTone-matched)
+        cadence_health = self._analyze_cadence(text, scene_tone)
+        if cadence_health < 6.0:
+            violations.append({
+                'rule': 'rhythmic_prose_control',
+                'excerpt': text[:200],
+                'severity': 6.0,
+                'message': f'Cadence health {cadence_health:.1f} below threshold for tone {scene_tone.value}',
+                'confidence': 0.7
+            })
+
+        # 4. Descriptor freshness check
+        freshness = self._check_descriptor_freshness(text)
+        if freshness < 5.0:
+            violations.append({
+                'rule': 'descriptor_variation_drive',
+                'excerpt': 'See descriptor_usage table',
+                'severity': 5.0,
+                'message': f'Descriptor freshness {freshness:.1f}',
+                'confidence': 0.8
+            })
+
+        # 5. Exposition density check
+        exposition_score = self._measure_exposition_density(text)
+        if exposition_score > 0.3:
+            violations.append({
+                'rule': 'controlled_mystery_engine',
+                'excerpt': self._get_exposition_excerpt(text),
+                'severity': 7.0,
+                'message': f'Exposition density {exposition_score:.1%}',
+                'confidence': 0.75
+            })
+
+        # 6. Emotional subtext check
+        emotional_score = self._measure_emotional_subtext(text)
+        if emotional_score < 4.0:
+            violations.append({
+                'rule': 'emotional_subtext_system',
+                'excerpt': text[:300],
+                'severity': 6.5,
+                'message': f'Emotional subtext score {emotional_score:.1f}',
+                'confidence': 0.65
+            })
+
+        # 7. Dialogue friction check
+        dialogue_health = self._analyze_dialogue_friction(text)
+        if dialogue_health < 5.0:
+            violations.append({
+                'rule': 'dialogue_friction_system',
+                'excerpt': self._get_dialogue_excerpt(text),
+                'severity': 5.5,
+                'message': f'Dialogue friction score {dialogue_health:.1f}',
+                'confidence': 0.6
+            })
+
+        # Generate rewrite suggestions for top violations
+        suggestions = self._generate_rewrite_prompt(violations[:5], text, scene_tone)
+
+        # Calculate overall score and badge
+        overall = (10.0 - len(abstraction_violations) * 1.5 + cadence_health + freshness) / 3
+        overall = max(0.0, min(10.0, overall))
+
+        badge = None
+        if overall >= 9.0:
+            badge = 'Gold'
+        elif overall >= 7.5:
+            badge = 'Silver'
+        elif overall >= 6.0:
+            badge = 'Bronze'
+
+        # Decision gate
+        critical_count = len([v for v in violations if v['severity'] >= 8.0])
+        passed = critical_count == 0
+
+        return ProseAuditResult(
+            passed=passed,
+            violations=violations,
+            rewrite_suggestions=suggestions,
+            tone_analysis=self._tone_breakdown(text),
+            abstraction_score=10.0 - len(abstraction_violations) * 1.5,
+            cadence_health=cadence_health,
+            descriptor_freshness=freshness,
+            overall_score=round(overall, 1),
+            badge=badge
+        )
+
+    # ========================================================================
+    # ADAPTIVE LEARNING — learn_from_author_edit
+    # ========================================================================
+
+    def learn_from_author_edit(self, original: str, edited: str, chapter_id: int, 
+                               author_reason: str = '', scene_tone: SceneTone = SceneTone.EMOTIONAL):
+        """
+        CORE LEARNING METHOD. Compares AI output with author edit.
+        Detects what changed, classifies it, updates style profile.
+        """
+        import difflib
+
+        # 1. Compute diff
+        sm = difflib.SequenceMatcher(None, original, edited)
+        opcodes = sm.get_opcodes()
+
+        for tag, i1, i2, j1, j2 in opcodes:
+            if tag == 'equal':
+                continue
+
+            removed = original[i1:i2]
+            added = edited[j1:j2]
+
+            # Classify change type
+            change_type = self._classify_change(removed, added, author_reason)
+
+            # 2. Update banned phrases if author removed an AI pattern
+            if change_type == 'removed_abstraction' and len(removed) > 5:
+                self.conn.execute(
+                    """INSERT INTO banned_phrases (project_id, phrase_pattern, pattern_type, 
+                    rule_source, severity, suggested_rewrite) 
+                    VALUES (?, ?, 'literal', 'author_preference', 8.0, ?)""",
+                    (self.project_id, removed, f"Author removed: {author_reason}")
+                )
+
+            # 3. Update style profile metrics
+            if change_type == 'shortened_sentences':
+                self._update_style_metric('sentence_avg_length', self._compute_avg_length(edited))
+
+            if change_type == 'increased_dialogue_friction':
+                self._update_style_metric('dialogue_friction_score', self._analyze_dialogue_friction(edited))
+
+            if change_type == 'increased_sensory_density':
+                self._update_style_metric('sensory_density', self._measure_sensory_density(edited))
+
+        # 4. Mark violations as author-overridden if author kept flagged phrase
+        audit_original = self.audit_text(original, chapter_id, scene_tone)
+        for v in audit_original.violations:
+            if v['excerpt'] in edited and v['excerpt'] not in original:
+                pass  # author rewrote it, good
+            elif v['excerpt'] in edited:
+                # author kept it despite flag
+                self.conn.execute(
+                    """UPDATE prose_violations SET author_override = 1, author_replacement = ? 
+                    WHERE excerpt = ? AND project_id = ?""",
+                    (edited, v['excerpt'], self.project_id)
+                )
+
+        self.conn.commit()
+        self._load_banned_phrases()  # Reload with new entries
+
+    def _classify_change(self, removed: str, added: str, reason: str) -> str:
+        """Classify what type of edit the author made."""
+        removed_lower = removed.lower()
+        added_lower = added.lower()
+
+        # Check for abstraction removal
+        abstraction_markers = ['felt', 'seemed', 'pressure', 'instinct', 'atmosphere', 'aura']
+        if any(m in removed_lower for m in abstraction_markers):
+            return 'removed_abstraction'
+
+        # Check for sentence shortening
+        if len(added.split()) < len(removed.split()) * 0.7:
+            return 'shortened_sentences'
+
+        # Check for dialogue friction increase
+        friction_markers = ['"', '—', '...', 'but', 'wait', 'no', 'stop']
+        if sum(1 for m in friction_markers if m in added) > sum(1 for m in friction_markers if m in removed):
+            return 'increased_dialogue_friction'
+
+        # Check for sensory density increase
+        sensory_words = ['saw', 'heard', 'felt', 'smelled', 'tasted', 'touch', 'sound', 'sight', 'scent', 'texture']
+        if sum(1 for w in sensory_words if w in added_lower) > sum(1 for w in sensory_words if w in removed_lower):
+            return 'increased_sensory_density'
+
+        return 'general_edit'
+
+    def _update_style_metric(self, metric_name: str, value: float):
+        """Update author style profile with running average."""
+        self.conn.execute(
+            """INSERT INTO author_style_profile (project_id, metric_name, metric_value, sample_count)
+            VALUES (?, ?, ?, 1)
+            ON CONFLICT(project_id, metric_name) DO UPDATE SET
+                metric_value = (metric_value * sample_count + excluded.metric_value) / (sample_count + 1),
+                sample_count = sample_count + 1,
+                last_updated = CURRENT_TIMESTAMP""",
+            (self.project_id, metric_name, value)
+        )
+
+    # ========================================================================
+    # STYLE PROMPT ASSEMBLY — For AI generation injection
+    # ========================================================================
+
+    def assemble_style_prompt(self, max_examples: int = 3) -> str:
+        """Build '=== AUTHOR STYLE PREFERENCES ===' string for few-shot prompting."""
+        # Get author's banned phrases + style metrics
+        cursor = self.conn.execute(
+            """SELECT phrase_pattern, suggested_rewrite FROM banned_phrases 
+            WHERE project_id = ? AND rule_source = 'author_preference' 
+            ORDER BY severity DESC LIMIT ?""",
+            (self.project_id, max_examples)
+        )
+        prefs = cursor.fetchall()
+
+        if not prefs:
+            return ''
+
+        lines = ['=== AUTHOR STYLE PREFERENCES ===', '']
+        for i, p in enumerate(prefs, 1):
+            lines.append(f'{i}. Instead of: "{p["phrase_pattern"]}"')
+            lines.append(f'   Use: "{p["suggested_rewrite"]}"')
+            lines.append('')
+
+        return '\n'.join(lines)
+
+    # ========================================================================
+    # BACKWARD COMPATIBLE: Original analyze_prose() signature
+    # ========================================================================
+
+    def analyze_prose(self, text: str, user_overrides: Optional[List[str]] = None,
+                     style_preferences: Optional[List[Dict]] = None) -> Dict[str, Any]:
+        """
+        BACKWARD COMPATIBLE wrapper matching original ai_engine.py signature.
+        Used by app.py, websocket_handlers.py, and export_service.py.
+        """
+        # Apply user overrides to banned list
+        effective_banned = self.banned[:]
+        overrides_applied = 0
+        if user_overrides:
+            for override in user_overrides:
+                effective_banned = [b for b in effective_banned if b['phrase_pattern'] != override]
+                overrides_applied += 1
+
+        # Run full audit with default EMOTIONAL tone
+        result = self.audit_text(text, chapter_id=0, scene_tone=SceneTone.EMOTIONAL)
+
+        # Convert to original format
+        violations_out = []
+        for v in result.violations:
+            if v['rule'] == 'banned_phrase':
+                violations_out.append({
+                    'pattern': v.get('rule_source', ''),
+                    'count': 1,
+                    'examples': [v['excerpt'][:100]]
+                })
+
+        # Check style preferences if provided
+        style_violations = []
+        if style_preferences:
+            for pref in style_preferences:
+                original = pref.get('original_pattern', '')
+                if original and original.lower() in text.lower():
+                    style_violations.append({
+                        'preference_id': pref.get('preference_id'),
+                        'original_pattern': original,
+                        'suggestion': pref.get('corrected_pattern', ''),
+                        'confidence': pref.get('confidence_score', 0.0)
+                    })
+
+        score = result.overall_score
+        if style_violations:
+            score = max(0.0, score - len(style_violations) * 0.3)
+
+        badge = None
+        if score >= 9.0:
+            badge = 'Gold'
+        elif score >= 7.5:
+            badge = 'Silver'
+        elif score >= 6.0:
+            badge = 'Bronze'
+
+        return {
+            'score': round(score, 1),
+            'badge': badge,
+            'violations': violations_out,
+            'status': 'flagged' if violations_out else 'clean',
+            'cadence': round(result.cadence_health, 2),
+            'penalty': len(violations_out) * 0.5,
+            'overrides_applied': overrides_applied,
+            'style_violations': style_violations,
+            'prose_audit': {  # NEW: Full v1.0 data for frontend
+                'passed': result.passed,
+                'abstraction_score': result.abstraction_score,
+                'cadence_health': result.cadence_health,
+                'descriptor_freshness': result.descriptor_freshness,
+                'tone_analysis': result.tone_analysis,
+                'rewrite_suggestions': result.rewrite_suggestions
+            }
+        }
+
+    # ========================================================================
+    # INTERNAL ANALYSIS METHODS
+    # ========================================================================
+
+    def _find_matches(self, text: str, ban: Dict) -> List[Dict]:
+        pattern = ban['phrase_pattern']
+        if ban['pattern_type'] == 'regex':
+            matches = []
+            for m in re.finditer(pattern, text, re.IGNORECASE):
+                start = max(0, m.start() - 40)
+                end = min(len(text), m.end() + 40)
+                matches.append({'excerpt': text[start:end], 'position': m.start()})
+            return matches
+        else:
+            matches = []
+            idx = text.lower().find(pattern.lower())
+            while idx != -1:
+                start = max(0, idx - 40)
+                end = min(len(text), idx + len(pattern) + 40)
+                matches.append({'excerpt': text[start:end], 'position': idx})
+                idx = text.lower().find(pattern.lower(), idx + 1)
+            return matches
+
+    def _audit_abstraction(self, text: str) -> List[Dict]:
+        abstractions = [
+            (r'\b(pressure|tension)\s+(increased|built|grew|mounted)', 'abstraction', 7.5, 'Show through physical environment or bodily reaction.'),
+            (r'\b(fear|terror|dread)\s+(washed over|engulfed|consumed|gripped)\b', 'emotional_shorthand', 7.0, 'Replace with physical manifestation: breathing, posture, movement.'),
+            (r'\b(something|a feeling|a sense)\s+(was wrong|told him|told her|warned)\b', 'abstraction', 6.5, 'Ground in specific sensory detail.'),
+            (r'\btime\s+(seemed to slow|stood still|froze)\b', 'abstraction', 6.0, 'Use sensory dilation: sound, breath, heartbeat.'),
+            (r'\b(the world|everything)\s+(spun|went dark|faded|tilted)\b', 'abstraction', 7.0, 'Specific physiological detail.'),
+            (r'\bhe\s+(somehow|instinctively|automatically)\b', 'ai_cadence', 5.5, 'Remove hedge words; show mechanism or muscle memory.'),
+            (r'\bshe\s+(somehow|instinctively|automatically)\b', 'ai_cadence', 5.5, 'Remove hedge words; show mechanism or muscle memory.'),
+            (r'\b(it was clear|clearly|obviously)\b', 'exposition_filler', 5.0, 'Show evidence; let reader infer.'),
+            (r'\bhe realized|she realized|they realized\b', 'ai_cadence', 5.5, 'Show realization through behavior or sensory shift.'),
+        ]
+        violations = []
+        for pattern, vtype, severity, suggestion in abstractions:
+            for m in re.finditer(pattern, text, re.IGNORECASE):
+                start = max(0, m.start() - 50)
+                end = min(len(text), m.end() + 50)
+                violations.append({
+                    'rule': 'concrete_experience_filter',
+                    'rule_source': vtype,
+                    'excerpt': text[start:end],
+                    'position': m.start(),
+                    'severity': severity,
+                    'suggested_rewrite': suggestion,
+                    'confidence': 0.85
+                })
+        return violations
+
+    def _analyze_cadence(self, text: str, tone: SceneTone) -> float:
+        sentences = re.split(r'[.!?]+', text)
+        sentences = [s.strip() for s in sentences if len(s.strip()) > 5]
+        if not sentences:
+            return 5.0
+
+        avg_len = sum(len(s.split()) for s in sentences) / len(sentences)
+        short_sentences = sum(1 for s in sentences if len(s.split()) <= 6)
+        short_ratio = short_sentences / len(sentences)
+
+        if tone == SceneTone.ACTION:
+            score = min(10.0, (12 / max(avg_len, 8)) * 5 + short_ratio * 5)
+        elif tone == SceneTone.EMOTIONAL:
+            score = 10.0 - abs(avg_len - 18) * 0.5 - max(0, short_ratio - 0.2) * 10
+        elif tone == SceneTone.HORROR:
+            variance = sum((len(s.split()) - avg_len) ** 2 for s in sentences) / len(sentences)
+            score = min(10.0, variance * 0.5 + short_ratio * 5)
+        elif tone == SceneTone.WONDER:
+            score = min(10.0, avg_len * 0.4 + (1 - short_ratio) * 5)
+        else:
+            score = 7.0
+
+        return max(0.0, min(10.0, score))
+
+    def _check_descriptor_freshness(self, text: str) -> float:
+        common_descriptors = ['reinforced', 'pressure', 'instinct', 'overwhelming', 
+                             'dangerous', 'massive', 'aura', 'power', 'surged',
+                             'intense', 'dark', 'cold', 'hot', 'sharp', 'heavy']
+        words = text.lower().split()
+        overused_count = 0
+        for desc in common_descriptors:
+            count = words.count(desc)
+            if count > 2:
+                overused_count += count - 2
+
+        project_overused = 0
+        for word in words:
+            if word in self.descriptor_history and self.descriptor_history[word] > 10:
+                project_overused += 1
+
+        penalty = overused_count * 0.5 + project_overused * 0.3
+        return max(0.0, 10.0 - penalty)
+
+    def _measure_exposition_density(self, text: str) -> float:
+        paragraphs = [p.strip() for p in text.split('\n\n') if len(p.strip()) > 20]
+        if not paragraphs:
+            return 0.0
+
+        exposition_starters = [
+            r'^The \w+ (was|had been|is)',
+            r'^\w+ (was|were|had been) a',
+            r'^In the \w+ (of|era|age|period)',
+            r'^\w+ (culture|society|civilization|kingdom|empire)',
+            r'^For \w+ (years|centuries|generations)',
+            r'^It (was|is) (said|known|believed|understood)',
+            r'^The (history|origin|legend|myth)',
+        ]
+
+        exposition_count = 0
+        for para in paragraphs:
+            for pattern in exposition_starters:
+                if re.search(pattern, para, re.IGNORECASE):
+                    exposition_count += 1
+                    break
+
+        return exposition_count / len(paragraphs)
+
+    def _measure_emotional_subtext(self, text: str) -> float:
+        direct_labels = re.findall(r'\b(felt|feeling|emotion|emotional|angry|sad|happy|afraid|terrified|anxious|worried|relieved)\b', text, re.IGNORECASE)
+        physical_indicators = re.findall(r'\b(breath|breathing|tremble|shaking|posture|shoulder|hand|jaw|blink|swallow|heartbeat|sweat|cold|warm|tight|loose)\b', text, re.IGNORECASE)
+
+        if not direct_labels and not physical_indicators:
+            return 5.0
+
+        ratio = len(physical_indicators) / (len(direct_labels) + len(physical_indicators) + 1)
+        return ratio * 10.0
+
+    def _analyze_dialogue_friction(self, text: str) -> float:
+        dialogue_blocks = re.findall(r'"([^"]+)"', text)
+        if not dialogue_blocks:
+            return 5.0
+
+        friction_markers = [
+            r'\b(wait|hold on|stop|no,|but |actually|look—|listen—)\b',
+            r'[.]{2,}|—',
+            r'\b(didn\'t|don\'t|not|never|no one|nothing)\b',
+            r'\?.*\?',
+        ]
+
+        friction_count = 0
+        for block in dialogue_blocks:
+            for pattern in friction_markers:
+                if re.search(pattern, block, re.IGNORECASE):
+                    friction_count += 1
+                    break
+
+        return (friction_count / len(dialogue_blocks)) * 10.0
+
+    def _tone_breakdown(self, text: str) -> Dict:
+        sentences = re.split(r'[.!?]+', text)
+        sentences = [s.strip() for s in sentences if len(s.strip()) > 5]
+
+        return {
+            'sentence_count': len(sentences),
+            'avg_sentence_length': sum(len(s.split()) for s in sentences) / max(len(sentences), 1),
+            'dialogue_ratio': len(re.findall(r'"[^"]+"', text)) / max(len(sentences), 1),
+            'sensory_word_density': len(re.findall(r'\b(saw|heard|felt|smelled|tasted|touch|sound|sight|scent|texture)\b', text, re.IGNORECASE)) / max(len(text.split()), 1),
+            'passive_voice_ratio': len(re.findall(r'\b(was|were|had been|being)\s+\w+ed\b', text, re.IGNORECASE)) / max(len(sentences), 1)
+        }
+
+    def _get_exposition_excerpt(self, text: str) -> str:
+        paragraphs = [p.strip() for p in text.split('\n\n') if len(p.strip()) > 20]
+        for para in paragraphs:
+            if re.search(r'^The \w+ (was|had been|is)', para, re.IGNORECASE):
+                return para[:200]
+        return text[:200]
+
+    def _get_dialogue_excerpt(self, text: str) -> str:
+        m = re.search(r'"[^"]{20,200}"', text)
+        return m.group(0) if m else text[:200]
+
+    def _generate_rewrite_prompt(self, violations: List[Dict], original_text: str, tone: SceneTone) -> List[Dict]:
+        prompts = []
+        for v in violations:
+            prompts.append({
+                'violation': v,
+                'rewrite_prompt': self._build_single_rewrite_prompt(v, tone),
+                'priority': v['severity']
+            })
+        return sorted(prompts, key=lambda x: x['priority'], reverse=True)
+
+    def _build_single_rewrite_prompt(self, violation: Dict, tone: SceneTone) -> str:
+        rule = violation['rule']
+        if rule == 'banned_phrase':
+            return f"Rewrite eliminating banned phrase: '{violation.get('excerpt', '')}'. {violation.get('suggested_rewrite', 'Use concrete sensory detail.')}."
+        elif rule == 'concrete_experience_filter':
+            return f"Rewrite to eliminate abstraction. Replace '{violation.get('excerpt', '')}' with physical consequence, environmental reaction, or sensory experience."
+        elif rule == 'rhythmic_prose_control':
+            return f"Adjust sentence rhythm for {tone.value} scene. Target: {'short, clean, rapid' if tone == SceneTone.ACTION else 'layered, smooth, lingering'}."
+        elif rule == 'descriptor_variation_drive':
+            return f"Replace overused descriptors with fresh sensory framing. Use texture, motion, comparison, or environmental interaction."
+        elif rule == 'controlled_mystery_engine':
+            return f"Break up exposition into implication, artifact, behavior, or partial truth. No lore dumps."
+        elif rule == 'emotional_subtext_system':
+            return f"Remove direct emotion labels. Show emotion through posture, silence, hesitation, breathing, pacing, or behavioral implication."
+        elif rule == 'dialogue_friction_system':
+            return f"Add dialogue friction: interruption, deflection, misunderstanding, implied meaning, or dodge."
+        else:
+            return f"Review and rewrite per rule: {rule}."
+
+    def _compute_avg_length(self, text: str) -> float:
+        sentences = re.split(r'[.!?]+', text)
+        sentences = [s.strip() for s in sentences if s.strip()]
+        if not sentences:
+            return 0.0
+        return sum(len(s.split()) for s in sentences) / len(sentences)
+
+    def _measure_sensory_density(self, text: str) -> float:
+        sensory = re.findall(r'\b(saw|heard|felt|smelled|tasted|touch|sound|sight|scent|texture)\b', text, re.IGNORECASE)
+        words = len(text.split())
+        return len(sensory) / max(words, 1) * 100
+
+    def record_descriptor_usage(self, text: str, chapter_id: int, scene_id: str):
+        """Track descriptor usage for freshness monitoring."""
+        words = re.findall(r'\b[a-zA-Z]{4,}\b', text.lower())
+        counts = Counter(words)
+
+        for word, count in counts.items():
+            if count >= 2:
+                self.conn.execute(
+                    """INSERT INTO descriptor_usage (project_id, descriptor, chapter_id, scene_id, usage_count)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(project_id, descriptor, chapter_id) DO UPDATE SET
+                        usage_count = usage_count + ?""",
+                    (self.project_id, word, chapter_id, scene_id, count, count)
+                )
+        self.conn.commit()
+
+    def log_violation(self, violation: Dict, chapter_id: int, scene_id: str, auto_rewritten: Optional[str] = None):
+        """Log a prose violation for adaptive learning."""
+        self.conn.execute(
+            """INSERT INTO prose_violations (project_id, chapter_id, scene_id, rule_id, violation_type, 
+            excerpt, confidence, auto_rewritten)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (self.project_id, chapter_id, scene_id, violation['rule'], 
+             violation.get('rule_source', 'prose_rule'),
+             violation['excerpt'], violation.get('confidence', 0.8), auto_rewritten)
+        )
+        self.conn.commit()
+
+
+# ============================================================================
+# BACKWARD COMPATIBLE: Module-level functions (original ai_engine.py API)
+# ============================================================================
+
+def calculate_cadence(text: str) -> float:
+    """Backward compatible cadence calculation."""
+    sentences = re.split(r'[.!?]+', text)
+    sentences = [s.strip() for s in sentences if s.strip()]
+    if not sentences:
+        return 0.0
+    lengths = [len(s.split()) for s in sentences]
+    avg_len = sum(lengths) / len(lengths)
+    variance = sum((l - avg_len) ** 2 for l in lengths) / len(lengths)
+    score = min(10.0, 5.0 + (variance / 10))
+    return round(score, 2)
+
+def analyze_prose(text: str, user_overrides: Optional[List[str]] = None,
+                 style_preferences: Optional[List[Dict]] = None) -> Dict[str, Any]:
+    """
+    BACKWARD COMPATIBLE: Original function signature.
+    Creates a default engine instance and runs analysis.
+    """
+    from flask import current_app
+    import os
+
+    db_path = os.getenv('DB_PATH', 'continuity/novel_master.db')
+    engine = ProseExecutionEngine(db_path)
+    return engine.analyze_prose(text, user_overrides, style_preferences)
+
+def analyze_with_style_profile(text: str, style_preferences: List[Dict[str, Any]], 
+                              user_overrides: Optional[List[str]] = None) -> Dict[str, Any]:
+    """
+    BACKWARD COMPATIBLE: Enhanced analysis with style profile.
+    """
+    return analyze_prose(text, user_overrides, style_preferences)

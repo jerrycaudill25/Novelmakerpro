@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: novel-master-web
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      - novel-master-storage:/app/storage
+      - novel-master-continuity:/app/continuity
+    env_file:
+      - .env
+    environment:
+      - DB_PATH=/app/continuity/novel_master.db
+      - STORAGE_ROOT=/app/storage
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+  redis:
+    image: redis:7-alpine
+    container_name: novel-master-redis
+    restart: unless-stopped
+    volumes:
+      - novel-master-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+volumes:
+  novel-master-storage:
+    driver: local
+  novel-master-continuity:
+    driver: local
+  novel-master-redis:
+    driver: local
