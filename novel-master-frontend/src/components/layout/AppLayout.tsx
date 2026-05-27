@@ -1,4 +1,3 @@
-// src/components/layout/AppLayout.tsx
 import { useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useStore } from '../../store/useStore';
@@ -23,14 +22,35 @@ export function AppLayout({ children }: AppLayoutProps) {
     document.documentElement.classList.toggle('dark', theme === 'dark');
   }, [theme]);
 
+  // DEBUG: Show loading state
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <motion.div
-          animate={{ rotate: 360 }}
-          transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
-          className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full"
-        />
+      <div style={{ 
+        minHeight: '100vh', 
+        background: '#0f0f23', 
+        color: 'white',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexDirection: 'column',
+        gap: '20px',
+        fontFamily: 'sans-serif'
+      }}>
+        <div style={{ 
+          width: '40px', 
+          height: '40px', 
+          border: '3px solid #6366f1', 
+          borderTopColor: 'transparent', 
+          borderRadius: '50%',
+          animation: 'spin 1s linear infinite'
+        }} />
+        <p>Loading... (isLoading: {isLoading ? 'true' : 'false'})</p>
+        <p>isAuthenticated: {isAuthenticated ? 'true' : 'false'}</p>
+        <style>{`
+          @keyframes spin {
+            to { transform: rotate(360deg); }
+          }
+        `}</style>
       </div>
     );
   }
@@ -41,11 +61,10 @@ export function AppLayout({ children }: AppLayoutProps) {
 
   return (
     <div className="min-h-screen bg-background flex">
-      {/* Sidebar — Desktop (spacer) + Mobile (overlay) */}
+      {/* Sidebar */}
       <AnimatePresence>
         {isAuthenticated && sidebarOpen && !isEditorPage && (
           <>
-            {/* Desktop: takes up layout space */}
             <motion.div
               initial={{ x: -280 }}
               animate={{ x: 0 }}
@@ -55,7 +74,6 @@ export function AppLayout({ children }: AppLayoutProps) {
             >
               <Sidebar />
             </motion.div>
-            {/* Mobile: fixed overlay with backdrop */}
             <motion.div
               initial={{ x: -280 }}
               animate={{ x: 0 }}
@@ -65,18 +83,17 @@ export function AppLayout({ children }: AppLayoutProps) {
             >
               <Sidebar />
             </motion.div>
-            {/* Mobile backdrop to close sidebar when tapping outside */}
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setSidebarOpen(false)}
+              onClick={() => useStore.getState().setSidebarOpen(false)}
               className="lg:hidden fixed inset-0 z-40 bg-black/50"
             />
           </>
         )}
       </AnimatePresence>
-
+      
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0">
         {isAuthenticated && <TopBar />}
@@ -91,7 +108,7 @@ export function AppLayout({ children }: AppLayoutProps) {
           </motion.div>
         </main>
       </div>
-
+      
       {/* Mobile Navigation */}
       {isAuthenticated && <MobileNav />}
     </div>

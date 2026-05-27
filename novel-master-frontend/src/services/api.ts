@@ -7,7 +7,6 @@ const api = axios.create({
   timeout: parseInt(import.meta.env.VITE_API_TIMEOUT || '30000'),
 })
 
-// Request interceptor to add auth token
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token')
   if (token) {
@@ -16,7 +15,6 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-// Response interceptor to handle errors
 api.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -28,13 +26,13 @@ api.interceptors.response.use(
   }
 )
 
-// API endpoints
 export const authApi = {
   login: (email: string, password: string) =>
     api.post('/auth/login', { email, password }),
   signup: (username: string, email: string, password: string) =>
     api.post('/auth/signup', { username, email, password }),
   logout: () => api.post('/auth/logout'),
+  getMe: () => api.get('/auth/me'),
 }
 
 export const novelApi = {
@@ -55,4 +53,10 @@ export const chapterApi = {
     api.delete(`/novels/${novelId}/chapters/${chapterId}`),
 }
 
+export const feedApi = {
+  getFeed: (limit: number = 20, offset: number = 0) =>
+    api.get(`/feed?limit=${limit}&offset=${offset}`),
+}
+
+export { api }
 export default api
