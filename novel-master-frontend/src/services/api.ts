@@ -8,7 +8,6 @@ const api = axios.create({
 })
 
 api.interceptors.request.use((config) => {
-  // Standardized to 'nm_token' to match useAuth.ts
   const token = localStorage.getItem('nm_token')
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
@@ -17,7 +16,7 @@ api.interceptors.request.use((config) => {
 })
 
 api.interceptors.response.use(
-  (response) => response.data, // Extracts data payload directly so you don't have to use .data.data everywhere
+  (response) => response.data,
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('nm_token')
@@ -28,14 +27,17 @@ api.interceptors.response.use(
 )
 
 export const authApi = {
-  login: (email: string, password: string) =>
-    api.post('/auth/register', { email, password }),
-  signup: (username: string, email: string, password: string) =>
-    api.post('/auth/register', { username, email, password }),
+  login: (credentials: {email: string, password: string}) =>
+    api.post('/auth/login', credentials),
+    
+  signup: (data: {username: string, email: string, password: string, display_name: string}) =>
+    api.post('/auth/register', data),
+    
   logout: () => api.post('/auth/logout'),
   getMe: () => api.get('/auth/me'),
 }
 
+// ... keep your novelApi, chapterApi, and feedApi exactly as they were
 export const novelApi = {
   getAll: () => api.get('/novels'),
   getOne: (id: string) => api.get(`/novels/${id}`),
@@ -46,12 +48,9 @@ export const novelApi = {
 
 export const chapterApi = {
   getAll: (novelId: string) => api.get(`/novels/${novelId}/chapters`),
-  create: (novelId: string, data: any) =>
-    api.post(`/novels/${novelId}/chapters`, data),
-  update: (novelId: string, chapterId: string, data: any) =>
-    api.put(`/novels/${novelId}/chapters/${chapterId}`, data),
-  delete: (novelId: string, chapterId: string) =>
-    api.delete(`/novels/${novelId}/chapters/${chapterId}`),
+  create: (novelId: string, data: any) => api.post(`/novels/${novelId}/chapters`, data),
+  update: (novelId: string, chapterId: string, data: any) => api.put(`/novels/${novelId}/chapters/${chapterId}`, data),
+  delete: (novelId: string, chapterId: string) => api.delete(`/novels/${novelId}/chapters/${chapterId}`),
 }
 
 export const feedApi = {

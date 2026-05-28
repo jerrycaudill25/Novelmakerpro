@@ -7,6 +7,7 @@ import logging
 import shutil
 import signal
 import sys
+import json
 from datetime import datetime, timezone, timedelta
 from functools import wraps
 
@@ -14,6 +15,7 @@ from flask import Flask, request, jsonify, send_file, g, make_response, redirect
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
+from werkzeug.middleware.proxy_fix import ProxyFix
 import jwt
 
 # Phase 2+ imports
@@ -24,6 +26,11 @@ from access_control import check_permission
 import storage_service
 
 app = Flask(__name__)
+
+# ============================================================================
+# AWS / PROXY FIX: Ensure headers are respected behind reverse proxies
+# ============================================================================
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 # ============================================================================
 # CRITICAL FIX: SECRET_KEY validation — fail hard in production
@@ -1161,7 +1168,6 @@ def run_ai_audit(project_id):
             ).fetchone()
             overrides = []
             if overrides_row and overrides_row['banned_word_overrides']:
-                import json
                 try:
                     overrides = json.loads(overrides_row['banned_word_overrides'])
                 except Exception:
