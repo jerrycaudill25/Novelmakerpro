@@ -1,69 +1,46 @@
 version: '3.8'
 
 services:
-  # -------------------------------------------------------------------------
-  # Novel Master Web Application
-  # -------------------------------------------------------------------------
   web:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: novel-master-web
+    restart: unless-stopped
     ports:
       - "5000:5000"
     volumes:
       - novel-master-storage:/app/storage
       - novel-master-continuity:/app/continuity
+    env_file:
+      - .env
     environment:
-      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY is required}
-      - FLASK_ENV=production
       - DB_PATH=/app/continuity/novel_master.db
       - STORAGE_ROOT=/app/storage
-      - JWT_EXPIRY_DAYS=${JWT_EXPIRY_DAYS:-7}
-      - REDIS_URL=redis://redis:6379/0
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://yourdomain.com}
-      - GUNICORN_WORKERS=${GUNICORN_WORKERS:-3}
-      - GUNICORN_TIMEOUT=${GUNICORN_TIMEOUT:-120}
     depends_on:
       redis:
         condition: service_healthy
-    restart: unless-stopped
-    # MEDIUM FIX #5: Log rotation to prevent disk fill
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/health')"]
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 15s
     deploy:
       resources:
         limits:
-          cpus: '1.0'
-          memory: 512M
+          cpus: '1.5'
+          memory: 1G
         reservations:
-          cpus: '0.25'
-          memory: 128M
+          cpus: '0.5'
+          memory: 256M
 
-  # -------------------------------------------------------------------------
-  # Redis - WebSocket message queue + session store
-  # -------------------------------------------------------------------------
   redis:
     image: redis:7-alpine
     container_name: novel-master-redis
+    restart: unless-stopped
     volumes:
       - novel-master-redis:/data
-    restart: unless-stopped
-    # MEDIUM FIX #5: Log rotation
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -75,31 +52,21 @@ services:
           cpus: '0.5'
           memory: 256M
 
-  # -------------------------------------------------------------------------
-  # Nginx Reverse Proxy (SSL termination + rate limiting)
-  # -------------------------------------------------------------------------
   nginx:
     image: nginx:alpine
     container_name: novel-master-nginx
+    restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./ssl:/etc/nginx/ssl:ro
+      - ./dist:/var/www/novelmaster/dist:ro
     depends_on:
-      - web
-    restart: unless-stopped
-    # MEDIUM FIX #5: Log rotation
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+      web:
+        condition: service_healthy
 
-# ---------------------------------------------------------------------------
-# Named Volumes (survive container restarts)
-# ---------------------------------------------------------------------------
+
 volumes:
   novel-master-storage:
     driver: local

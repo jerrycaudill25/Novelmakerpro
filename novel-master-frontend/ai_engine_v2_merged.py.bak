@@ -64,7 +64,7 @@ CONCRETE_REPLACEMENTS = {
     'the atmosphere was tense': [
         'No one spoke. The fire popped, too loud in the silence.',
         'Glasses stopped clinking. A chair scraped, froze mid-movement.',
-    "She watched the guard's thumb drift to his sword belt. Watched it stop there."
+        "She watched the guard's thumb drift to his sword belt. Watched it stop there."0
     ],
     'structurally reinforced': [
         'The door held. The ram splintered oak, but the iron bands held.',

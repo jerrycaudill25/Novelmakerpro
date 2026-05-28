@@ -11,8 +11,8 @@ echo "════════════════════════�
 # ─── Configuration ─────────────────────────────────────────────────────────
 DOMAIN="${DOMAIN:-yourdomain.com}"
 EMAIL="${EMAIL:-your-email@example.com}"
-FRONTEND_DIR="${FRONTEND_DIR:-/home/ubuntu/novel-master-frontend}"
-BACKEND_DIR="${BACKEND_DIR:-/home/ubuntu/novel-master-backend}"
+FRONTEND_DIR="${FRONTEND_DIR:-/home/ubuntu/Novelmakerpro/novel-master-frontend}"
+BACKEND_DIR="${BACKEND_DIR:-/home/ubuntu/Novelmakerpro/novel-master-frontend}"
 WEB_ROOT="/var/www/novel-master"
 
 # ─── System Update ─────────────────────────────────────────────────────────

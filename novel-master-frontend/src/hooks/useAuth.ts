@@ -7,41 +7,52 @@ import { wsService } from '../services/websocket';
 export function useAuth() {
   const { user, isAuthenticated, isLoading, setUser, setAuthenticated, setLoading } = useStore();
   const queryClient = useQueryClient();
+  const hasToken = !!localStorage.getItem('nm_token');
 
-  const { data: meData, isLoading: meLoading } = useQuery({
+  const { data: meData, isSuccess, isError } = useQuery({
     queryKey: ['me'],
     queryFn: () => authApi.getMe(),
-    enabled: !!localStorage.getItem('nm_token'),
+    enabled: hasToken,
     retry: false,
   });
 
+  // 1. If there is NO token, drop the loading gate immediately
   useEffect(() => {
-    if (meData) {
+    if (!hasToken) {
+      setUser(null);
+      setAuthenticated(false);
+      setLoading(false);
+    }
+  }, [hasToken, setUser, setAuthenticated, setLoading]);
+
+  // 2. If the backend successfully verifies the token
+  useEffect(() => {
+    if (isSuccess && meData) {
       setUser(meData);
       setAuthenticated(true);
       wsService.connect();
-    }
-  }, [meData, setUser, setAuthenticated]);
-
-  useEffect(() => {
-    const hasToken = !!localStorage.getItem('nm_token');
-    if (!meLoading && !meData && hasToken) {
-      setUser(null);
-      setAuthenticated(false);
-      localStorage.removeItem('nm_token');
-    }
-  }, [meLoading, meData, setUser, setAuthenticated]);
-
-  useEffect(() => {
-    if (!meLoading) {
       setLoading(false);
     }
-  }, [meLoading, setLoading]);
+  }, [isSuccess, meData, setUser, setAuthenticated, setLoading]);
+
+  // 3. If the token is expired or invalid
+  useEffect(() => {
+    if (isError) {
+      localStorage.removeItem('nm_token');
+      setUser(null);
+      setAuthenticated(false);
+      setLoading(false);
+    }
+  }, [isError, setUser, setAuthenticated, setLoading]);
 
   const loginMutation = useMutation({
-    mutationFn: authApi.login,
-    onSuccess: (data) => {
-      setUser(data.user);
+    mutationFn: (variables: { email: string; password: any }) => 
+      authApi.login(variables.email, variables.password),
+    onSuccess: (data: any) => {
+      const token = data.token || data.accessToken || data.access_token;
+      if (token) localStorage.setItem('nm_token', token);
+      
+      setUser(data.user || data);
       setAuthenticated(true);
       wsService.connect();
       queryClient.invalidateQueries({ queryKey: ['me'] });
@@ -49,9 +60,13 @@ export function useAuth() {
   });
 
   const registerMutation = useMutation({
-    mutationFn: authApi.signup,
-    onSuccess: (data) => {
-      setUser(data.user);
+    mutationFn: (variables: { username: string; email: string; password: any }) => 
+      authApi.signup(variables.username, variables.email, variables.password),
+    onSuccess: (data: any) => {
+      const token = data.token || data.accessToken || data.access_token;
+      if (token) localStorage.setItem('nm_token', token);
+      
+      setUser(data.user || data);
       setAuthenticated(true);
       wsService.connect();
       queryClient.invalidateQueries({ queryKey: ['me'] });
@@ -59,6 +74,7 @@ export function useAuth() {
   });
 
   const logout = () => {
+    localStorage.removeItem('nm_token');
     useStore.getState().logout();
     wsService.disconnect();
     queryClient.clear();
@@ -74,6 +90,6 @@ export function useAuth() {
     isLoginLoading: loginMutation.isPending,
     isRegisterLoading: registerMutation.isPending,
     loginError: loginMutation.error,
-    registerError: registerMutation.error,
+    registerError: loginMutation.error,
   };
 }

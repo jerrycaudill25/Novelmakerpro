@@ -8,7 +8,8 @@ const api = axios.create({
 })
 
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token')
+  // Standardized to 'nm_token' to match useAuth.ts
+  const token = localStorage.getItem('nm_token')
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
@@ -16,10 +17,10 @@ api.interceptors.request.use((config) => {
 })
 
 api.interceptors.response.use(
-  (response) => response,
+  (response) => response.data, // Extracts data payload directly so you don't have to use .data.data everywhere
   (error) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem('token')
+      localStorage.removeItem('nm_token')
       window.location.href = '/login'
     }
     return Promise.reject(error)
@@ -28,9 +29,9 @@ api.interceptors.response.use(
 
 export const authApi = {
   login: (email: string, password: string) =>
-    api.post('/auth/login', { email, password }),
+    api.post('/auth/register', { email, password }),
   signup: (username: string, email: string, password: string) =>
-    api.post('/auth/signup', { username, email, password }),
+    api.post('/auth/register', { username, email, password }),
   logout: () => api.post('/auth/logout'),
   getMe: () => api.get('/auth/me'),
 }
