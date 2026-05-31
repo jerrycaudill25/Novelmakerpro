@@ -26,7 +26,7 @@ from access_control import check_permission
 import storage_service
 
 app = Flask(__name__)
-
+CORS(app)
 # ============================================================================
 # AWS / PROXY FIX: Ensure headers are respected behind reverse proxies
 # ============================================================================

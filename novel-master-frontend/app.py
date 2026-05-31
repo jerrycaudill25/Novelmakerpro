@@ -519,7 +519,7 @@ def register():
             return jsonify({'message': f'{field} required'}), 400
     username = data['username'].strip().lower()
     email = data['email'].strip().lower()
-    password = data['password']
+    password = data['password'].strip()
     display_name = data['display_name'].strip()
 
     if not re.match(r'^[a-z0-9_]{3,30}$', username):
@@ -564,7 +564,7 @@ def register():
 def login():
     data = request.get_json()
     identifier = data.get('username', '').strip().lower()
-    password = data.get('password', '')
+    password = data.get('password', '').strip()
     if not identifier or not password:
         return jsonify({'message': 'Username/email and password required'}), 400
 
@@ -1386,6 +1386,492 @@ init_websockets(app)
 # ---------------------------------------------------------------------------
 # Main Entry (development only — gunicorn ignores this block)
 # ---------------------------------------------------------------------------
+
+
+# ========== PASSWORD RESET ENDPOINTS ==========
+
+@app.route('/api/auth/forgot-password', methods=['POST'])
+def forgot_password():
+    data = request.get_json()
+    email = data.get('email', '').strip().lower()
+    if not email:
+        return jsonify({'message': 'Email required'}), 400
+    
+    conn = sqlite3.connect('/app/continuity/novel_master.db')
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS password_resets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            token TEXT UNIQUE NOT NULL,
+            expires_at TIMESTAMP NOT NULL,
+            used INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(user_id)
+        )
+    ''')
+    
+    cursor.execute('SELECT user_id FROM users WHERE email = ?', (email,))
+    user = cursor.fetchone()
+    
+    if user:
+        token = secrets.token_urlsafe(32)
+        expires_at = datetime.utcnow() + timedelta(hours=24)
+        cursor.execute(
+            'INSERT INTO password_resets (user_id, token, expires_at) VALUES (?, ?, ?)',
+            (user['user_id'], token, expires_at)
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({
+            'message': 'If an account exists, a reset link has been generated.',
+            'reset_token': token
+        }), 200
+    
+    conn.close()
+    return jsonify({'message': 'If an account exists, a reset link has been generated.'}), 200
+
+
+@app.route('/api/auth/reset-password', methods=['POST'])
+def reset_password():
+    data = request.get_json()
+    token = data.get('token', '').strip()
+    password = data.get('password', '')
+    
+    if not token or not password:
+        return jsonify({'message': 'Token and password required'}), 400
+    if len(password) < 8:
+        return jsonify({'message': 'Password must be at least 8 characters'}), 400
+    
+    conn = sqlite3.connect('/app/continuity/novel_master.db')
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT pr.*, u.email 
+        FROM password_resets pr
+        JOIN users u ON pr.user_id = u.user_id
+        WHERE pr.token = ? AND pr.used = 0 AND pr.expires_at > ?
+    ''', (token, datetime.utcnow()))
+    
+    reset = cursor.fetchone()
+    
+    if not reset:
+        conn.close()
+        return jsonify({'message': 'Invalid or expired token'}), 400
+    
+    password_hash = generate_password_hash(password, method='pbkdf2:sha256', salt_length=16)
+    cursor.execute('UPDATE users SET password_hash = ? WHERE user_id = ?', (password_hash, reset['user_id']))
+    cursor.execute('UPDATE password_resets SET used = 1 WHERE id = ?', (reset['id'],))
+    conn.commit()
+    conn.close()
+    
+    return jsonify({'message': 'Password reset successfully'}), 200
+
+
+
+
+# ========== ADMIN ENDPOINTS ==========
+
+@app.route('/api/admin/users', methods=['GET'])
+@jwt_required
+def admin_get_users():
+    current_user_id = get_jwt_identity()
+    conn = sqlite3.connect('/app/continuity/novel_master.db')
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    # Check if current user is admin
+    cursor.execute('SELECT role FROM users WHERE user_id = ?', (current_user_id,))
+    current_user = cursor.fetchone()
+    if not current_user or current_user['role'] != 'admin':
+        conn.close()
+        return jsonify({'message': 'Admin access required'}), 403
+    
+    cursor.execute('''SELECT user_id, username, display_name, email, role, tier, is_verified, created_at 
+                     FROM users ORDER BY created_at DESC''')
+    users = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return jsonify({'users': users}), 200
+
+
+@app.route('/api/admin/users/<int:user_id>/role', methods=['PUT'])
+@jwt_required
+def admin_update_role(user_id):
+    current_user_id = get_jwt_identity()
+    data = request.get_json()
+    new_role = data.get('role', '').strip().lower()
+    
+    if new_role not in ['basic', 'moderator', 'admin']:
+        return jsonify({'message': 'Invalid role'}), 400
+    
+    conn = sqlite3.connect('/app/continuity/novel_master.db')
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT role FROM users WHERE user_id = ?', (current_user_id,))
+    current_user = cursor.fetchone()
+    if not current_user or current_user['role'] != 'admin':
+        conn.close()
+        return jsonify({'message': 'Admin access required'}), 403
+    
+    cursor.execute('UPDATE users SET role = ? WHERE user_id = ?', (new_role, user_id))
+    conn.commit()
+    conn.close()
+    return jsonify({'message': 'Role updated successfully'}), 200
+
+
+@app.route('/api/admin/users/<int:user_id>', methods=['DELETE'])
+@jwt_required
+def admin_delete_user(user_id):
+    current_user_id = get_jwt_identity()
+    
+    if current_user_id == user_id:
+        return jsonify({'message': 'Cannot delete yourself'}), 400
+    
+    conn = sqlite3.connect('/app/continuity/novel_master.db')
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT role FROM users WHERE user_id = ?', (current_user_id,))
+    current_user = cursor.fetchone()
+    if not current_user or current_user['role'] != 'admin':
+        conn.close()
+        return jsonify({'message': 'Admin access required'}), 403
+    
+    cursor.execute('DELETE FROM users WHERE user_id = ?', (user_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'message': 'User deleted successfully'}), 200
+
+
+
+# ========== AI CO-AUTHOR ==========
+@app.route('/api/ai/continue', methods=['POST'])
+@jwt_required
+def ai_continue():
+    data = request.get_json()
+    context = data.get('context', '')
+    style = data.get('style', 'neutral')
+    project_id = data.get('project_id')
+    if not context: return jsonify({'text': ''}), 200
+    
+    user_id = get_jwt_identity()
+    conn = sqlite3.connect('/app/continuity/novel_master.db')
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    
+    # Fetch user context
+    c.execute('SELECT name, role, backstory FROM characters WHERE user_id = ?', (user_id,))
+    characters = c.fetchall()
+    c.execute('SELECT title, content FROM lore_entries WHERE user_id = ?', (user_id,))
+    lore = c.fetchall()
+    c.execute('SELECT title FROM timelines WHERE user_id = ?', (user_id,))
+    timelines = c.fetchall()
+    conn.close()
+    
+    # Build context string
+    ctx_parts = []
+    if characters:
+        ctx_parts.append('Characters: ' + '; '.join([f"{ch['name']} ({ch['role']})" for ch in characters[:3]]))
+    if lore:
+        ctx_parts.append('Lore: ' + '; '.join([f"{l['title']}" for l in lore[:3]]))
+    if timelines:
+        ctx_parts.append('Timelines: ' + '; '.join([f"{t['title']}" for t in timelines[:2]]))
+    
+    ctx_str = ' | '.join(ctx_parts) if ctx_parts else ''
+    
+    prefixes = {'hemingway': 'The old man tightened his grip. ', 'tolkien': 'In those days, under the shadow of the mountain, ', 'noir': 'The rain fell hard. She lit a cigarette. ', 'romance': 'Her heart fluttered as their eyes met. ', 'gothic': 'The candle flickered, casting long shadows. ', 'pulp': 'Laser blasts tore through the hull. ', 'neutral': ''}
+    prefix = prefixes.get(style, '')
+    sentences = context.strip().split('. ')
+    last = sentences[-1] if sentences else ''
+    
+    # Include context in response
+    text = prefix + last + ' continued forward, each step echoing in the silence.'
+    if ctx_str:
+        text += ' [Context: ' + ctx_str + ']'
+    
+    return jsonify({'text': text, 'style': style, 'context_used': ctx_str != ''}), 200
+
+@app.route('/api/ai/expand', methods=['POST'])
+@jwt_required
+def ai_expand():
+    data = request.get_json()
+    text = data.get('text', '')
+    style = data.get('style', 'neutral')
+    if not text: return jsonify({'text': ''}), 200
+    
+    user_id = get_jwt_identity()
+    conn = sqlite3.connect('/app/continuity/novel_master.db')
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute('SELECT name, personality FROM characters WHERE user_id = ?', (user_id,))
+    chars = c.fetchall()
+    conn.close()
+    
+    char_ctx = ''
+    if chars:
+        char_ctx = ' Drawing from characters like ' + ', '.join([f"{ch['name']} ({ch['personality'][:30]}...)" for ch in chars[:2]]) + '.'
+    
+    return jsonify({'text': text + ' The details emerged slowly, each word painting a richer picture.' + char_ctx, 'style': style}), 200
+
+@app.route('/api/ai/rewrite', methods=['POST'])
+@jwt_required
+def ai_rewrite():
+    data = request.get_json()
+    text = data.get('text', '')
+    style = data.get('style', 'neutral')
+    if not text: return jsonify({'text': ''}), 200
+    
+    user_id = get_jwt_identity()
+    conn = sqlite3.connect('/app/continuity/novel_master.db')
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute('SELECT name, role FROM characters WHERE user_id = ?', (user_id,))
+    chars = c.fetchall()
+    conn.close()
+    
+    char_names = [ch['name'] for ch in chars[:2]] if chars else []
+    
+    r = {
+        'hemingway': text + (' He said nothing. The sun was hot.' if not char_names else f" {char_names[0]} said nothing. The sun was hot."),
+        'tolkien': 'Long had the words been spoken. ' + text + (' And ' + char_names[0] + ' listened.' if char_names else ''),
+        'noir': 'The dame walked in. ' + text + (' ' + char_names[0] + ' watched from the shadows.' if char_names else ''),
+        'romance': 'With trembling hands, she whispered. ' + text + (' ' + char_names[0] + ' drew closer.' if char_names else ''),
+        'gothic': 'Through the mist, the words echoed. ' + text + (' ' + char_names[0] + ' stood at the edge of the abyss.' if char_names else ''),
+        'pulp': 'ZAP! ' + text + (' ' + char_names[0] + ' dove for cover as the ray-gun hummed!' if char_names else ' The ray-gun hummed.'),
+        'neutral': text
+    }
+    return jsonify({'text': r.get(style, text), 'style': style}), 200
+
+@app.route('/api/ai/describe', methods=['POST'])
+@jwt_required
+def ai_describe():
+    data = request.get_json()
+    subject = data.get('subject', '')
+    style = data.get('style', 'neutral')
+    d = {'hemingway': 'The ' + subject + ' stood against the horizon, simple and true.', 'tolkien': 'Lo! The ' + subject + ' rose majestically, as if wrought by the Elder Days.', 'noir': 'The ' + subject + ' sat in the corner, half-hidden by shadows.', 'romance': 'The ' + subject + ' glowed softly in the candlelight.', 'gothic': 'The ' + subject + ' loomed from the darkness, twisted by time.', 'pulp': 'The ' + subject + ' pulsed with unearthly energy!', 'neutral': 'The ' + subject + ' was clearly visible.'}
+    return jsonify({'text': d.get(style, d['neutral']), 'style': style}), 200
+
+@app.route('/api/ai/brainstorm', methods=['POST'])
+@jwt_required
+def ai_brainstorm():
+    data = request.get_json()
+    topic = data.get('topic', '')
+    if not topic: return jsonify({'ideas': []}), 200
+    return jsonify({'ideas': ['What if ' + topic + ' happened in reverse?', 'Give ' + topic + ' an unexpected ally.', 'Explore ' + topic + ' through a minor character.', 'Transport ' + topic + ' to a different era.', 'Add a ticking clock to ' + topic + '.', 'Reveal ' + topic + ' was a dream.'], 'topic': topic}), 200
+
+# ========== CHARACTERS ==========
+@app.route('/api/characters', methods=['GET'])
+@jwt_required
+def get_characters():
+    user_id = get_jwt_identity()
+    conn = sqlite3.connect('/app/continuity/novel_master.db')
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("CREATE TABLE IF NOT EXISTS characters (character_id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT, role TEXT, appearance TEXT, personality TEXT, backstory TEXT, goals TEXT, relationships TEXT, tags TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+    c.execute('SELECT * FROM characters WHERE user_id = ? ORDER BY created_at DESC', (user_id,))
+    chars = [dict(row) for row in c.fetchall()]
+    conn.close()
+    return jsonify({'characters': chars}), 200
+
+@app.route('/api/characters', methods=['POST'])
+@jwt_required
+def create_character():
+    user_id = get_jwt_identity()
+    data = request.get_json()
+    name = data.get('name', '').strip()
+    if not name: return jsonify({'message': 'Name required'}), 400
+    conn = sqlite3.connect('/app/continuity/novel_master.db')
+    c = conn.cursor()
+    c.execute('INSERT INTO characters (user_id, name, role, appearance, personality, backstory, goals, relationships, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', (user_id, name, data.get('role', ''), data.get('appearance', ''), data.get('personality', ''), data.get('backstory', ''), data.get('goals', ''), data.get('relationships', ''), data.get('tags', '')))
+    cid = c.lastrowid
+    conn.commit()
+    conn.close()
+    return jsonify({'character_id': cid, 'message': 'Created'}), 201
+
+@app.route('/api/characters/<int:character_id>', methods=['PUT'])
+@jwt_required
+def update_character(character_id):
+    user_id = get_jwt_identity()
+    data = request.get_json()
+    conn = sqlite3.connect('/app/continuity/novel_master.db')
+    c = conn.cursor()
+    c.execute('SELECT user_id FROM characters WHERE character_id = ?', (character_id,))
+    row = c.fetchone()
+    if not row or row[0] != user_id:
+        conn.close()
+        return jsonify({'message': 'Not found'}), 404
+    c.execute('UPDATE characters SET name=?, role=?, appearance=?, personality=?, backstory=?, goals=?, relationships=?, tags=? WHERE character_id=?', (data.get('name', ''), data.get('role', ''), data.get('appearance', ''), data.get('personality', ''), data.get('backstory', ''), data.get('goals', ''), data.get('relationships', ''), data.get('tags', ''), character_id))
+    conn.commit()
+    conn.close()
+    return jsonify({'message': 'Updated'}), 200
+
+@app.route('/api/characters/<int:character_id>', methods=['DELETE'])
+@jwt_required
+def delete_character(character_id):
+    user_id = get_jwt_identity()
+    conn = sqlite3.connect('/app/continuity/novel_master.db')
+    c = conn.cursor()
+    c.execute('SELECT user_id FROM characters WHERE character_id = ?', (character_id,))
+    row = c.fetchone()
+    if not row or row[0] != user_id:
+        conn.close()
+        return jsonify({'message': 'Not found'}), 404
+    c.execute('DELETE FROM characters WHERE character_id = ?', (character_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'message': 'Deleted'}), 200
+
+# ========== TIMELINES ==========
+@app.route('/api/timelines', methods=['GET'])
+@jwt_required
+def get_timelines():
+    user_id = get_jwt_identity()
+    conn = sqlite3.connect('/app/continuity/novel_master.db')
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("CREATE TABLE IF NOT EXISTS timelines (timeline_id INTEGER PRIMARY KEY, user_id INTEGER, title TEXT, description TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+    c.execute("CREATE TABLE IF NOT EXISTS timeline_events (event_id INTEGER PRIMARY KEY, timeline_id INTEGER, title TEXT, description TEXT, date_text TEXT, chapter_ref TEXT, sort_order INTEGER DEFAULT 0)")
+    c.execute('SELECT * FROM timelines WHERE user_id = ? ORDER BY created_at DESC', (user_id,))
+    timelines = []
+    for row in c.fetchall():
+        t = dict(row)
+        c.execute('SELECT * FROM timeline_events WHERE timeline_id = ? ORDER BY sort_order', (t['timeline_id'],))
+        t['events'] = [dict(e) for e in c.fetchall()]
+        timelines.append(t)
+    conn.close()
+    return jsonify({'timelines': timelines}), 200
+
+@app.route('/api/timelines', methods=['POST'])
+@jwt_required
+def create_timeline():
+    user_id = get_jwt_identity()
+    data = request.get_json()
+    title = data.get('title', '').strip()
+    if not title: return jsonify({'message': 'Title required'}), 400
+    conn = sqlite3.connect('/app/continuity/novel_master.db')
+    c = conn.cursor()
+    c.execute('INSERT INTO timelines (user_id, title, description) VALUES (?, ?, ?)', (user_id, title, data.get('description', '')))
+    tid = c.lastrowid
+    conn.commit()
+    conn.close()
+    return jsonify({'timeline_id': tid, 'message': 'Created'}), 201
+
+@app.route('/api/timelines/<int:timeline_id>/events', methods=['POST'])
+@jwt_required
+def add_event(timeline_id):
+    user_id = get_jwt_identity()
+    data = request.get_json()
+    conn = sqlite3.connect('/app/continuity/novel_master.db')
+    c = conn.cursor()
+    c.execute('SELECT user_id FROM timelines WHERE timeline_id = ?', (timeline_id,))
+    row = c.fetchone()
+    if not row or row[0] != user_id:
+        conn.close()
+        return jsonify({'message': 'Not found'}), 404
+    c.execute('INSERT INTO timeline_events (timeline_id, title, description, date_text, chapter_ref, sort_order) VALUES (?, ?, ?, ?, ?, ?)', (timeline_id, data.get('title', ''), data.get('description', ''), data.get('date_text', ''), data.get('chapter_ref', ''), data.get('sort_order', 0)))
+    conn.commit()
+    conn.close()
+    return jsonify({'message': 'Event added'}), 201
+
+@app.route('/api/timelines/<int:timeline_id>', methods=['DELETE'])
+@jwt_required
+def delete_timeline(timeline_id):
+    user_id = get_jwt_identity()
+    conn = sqlite3.connect('/app/continuity/novel_master.db')
+    c = conn.cursor()
+    c.execute('SELECT user_id FROM timelines WHERE timeline_id = ?', (timeline_id,))
+    row = c.fetchone()
+    if not row or row[0] != user_id:
+        conn.close()
+        return jsonify({'message': 'Not found'}), 404
+    c.execute('DELETE FROM timeline_events WHERE timeline_id = ?', (timeline_id,))
+    c.execute('DELETE FROM timelines WHERE timeline_id = ?', (timeline_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'message': 'Deleted'}), 200
+
+# ========== LORE ==========
+@app.route('/api/lore', methods=['GET'])
+@jwt_required
+def get_lore():
+    user_id = get_jwt_identity()
+    conn = sqlite3.connect('/app/continuity/novel_master.db')
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("CREATE TABLE IF NOT EXISTS lore_entries (lore_id INTEGER PRIMARY KEY, user_id INTEGER, title TEXT, category TEXT, content TEXT, linked_characters TEXT, linked_timelines TEXT, tags TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+    c.execute('SELECT * FROM lore_entries WHERE user_id = ? ORDER BY created_at DESC', (user_id,))
+    entries = [dict(row) for row in c.fetchall()]
+    conn.close()
+    return jsonify({'entries': entries}), 200
+
+@app.route('/api/lore', methods=['POST'])
+@jwt_required
+def create_lore():
+    user_id = get_jwt_identity()
+    data = request.get_json()
+    title = data.get('title', '').strip()
+    if not title: return jsonify({'message': 'Title required'}), 400
+    conn = sqlite3.connect('/app/continuity/novel_master.db')
+    c = conn.cursor()
+    c.execute('INSERT INTO lore_entries (user_id, title, category, content, linked_characters, linked_timelines, tags) VALUES (?, ?, ?, ?, ?, ?, ?)', (user_id, title, data.get('category', ''), data.get('content', ''), data.get('linked_characters', ''), data.get('linked_timelines', ''), data.get('tags', '')))
+    lid = c.lastrowid
+    conn.commit()
+    conn.close()
+    return jsonify({'lore_id': lid, 'message': 'Created'}), 201
+
+@app.route('/api/lore/<int:lore_id>', methods=['DELETE'])
+@jwt_required
+def delete_lore(lore_id):
+    user_id = get_jwt_identity()
+    conn = sqlite3.connect('/app/continuity/novel_master.db')
+    c = conn.cursor()
+    c.execute('SELECT user_id FROM lore_entries WHERE lore_id = ?', (lore_id,))
+    row = c.fetchone()
+    if not row or row[0] != user_id:
+        conn.close()
+        return jsonify({'message': 'Not found'}), 404
+    c.execute('DELETE FROM lore_entries WHERE lore_id = ?', (lore_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'message': 'Deleted'}), 200
+
+# ========== STORAGE ==========
+@app.route('/api/user/storage', methods=['GET'])
+@jwt_required
+def get_storage():
+    user_id = get_jwt_identity()
+    conn = sqlite3.connect('/app/continuity/novel_master.db')
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute('SELECT storage_limit_mb, storage_used_mb, tier FROM users WHERE user_id = ?', (user_id,))
+    user = c.fetchone()
+    conn.close()
+    if not user: return jsonify({'message': 'Not found'}), 404
+    limits = {'free': {'w': 100, 'm': 400}, 'pro': {'w': 300, 'm': 1200}, 'enterprise': {'w': 2000, 'm': 8000}}
+    l = limits.get(user['tier'], limits['free'])
+    return jsonify({'tier': user['tier'], 'storage_used_mb': user['storage_used_mb'], 'storage_limit_mb': user['storage_limit_mb'], 'writing_limit_mb': l['w'], 'media_limit_mb': l['m'], 'writing_used_mb': user['storage_used_mb'] * 0.2, 'media_used_mb': user['storage_used_mb'] * 0.8}), 200
+
+
+@app.route('/api/projects/auto-save', methods=['POST'])
+@jwt_required
+def auto_save():
+    user_id = get_jwt_identity()
+    data = request.get_json()
+    content_text = data.get('content', '')
+    project_id = data.get('project_id')
+    timestamp = data.get('timestamp', '')
+    conn = sqlite3.connect('/app/continuity/novel_master.db')
+    c = conn.cursor()
+    c.execute("CREATE TABLE IF NOT EXISTS auto_saves (save_id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, project_id INTEGER, content TEXT, timestamp TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+    c.execute('INSERT INTO auto_saves (user_id, project_id, content, timestamp) VALUES (?, ?, ?, ?)', (user_id, project_id, content_text, timestamp))
+    conn.commit()
+    conn.close()
+    return jsonify({'message': 'Auto-saved'}), 200
+
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000, debug=False)
 
@@ -1395,6 +1881,7 @@ if __name__ == '__main__':
 import urllib.request
 import urllib.parse
 import secrets
+from datetime import datetime, timedelta
 
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID', '')
 GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET', '')

@@ -1,12 +1,13 @@
 import axios from 'axios'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
-
 const api = axios.create({
-  baseURL: `${API_URL}/api`,
-  timeout: parseInt(import.meta.env.VITE_API_TIMEOUT || '30000'),
+  baseURL: '/api',
+  headers: {
+    'Content-Type': 'application/json',
+  },
 })
 
+// Request interceptor - add auth token
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('nm_token')
   if (token) {
@@ -15,29 +16,29 @@ api.interceptors.request.use((config) => {
   return config
 })
 
+// Response interceptor - return data directly
 api.interceptors.response.use(
   (response) => response.data,
   (error) => {
-    if (error.response?.status === 401) {
+    // Only handle 401 on explicit auth endpoints, not on general API calls
+    if (error.response?.status === 401 && error.config?.url?.includes('/auth/')) {
       localStorage.removeItem('nm_token')
-      window.location.href = '/login'
+      localStorage.removeItem('nm_user')
+      // Don't force redirect here - let components handle it
     }
     return Promise.reject(error)
   }
 )
 
 export const authApi = {
-  login: (credentials: {email: string, password: string}) =>
+  login: (credentials: {username: string, password: string}) =>
     api.post('/auth/login', credentials),
-    
   signup: (data: {username: string, email: string, password: string, display_name: string}) =>
     api.post('/auth/register', data),
-    
   logout: () => api.post('/auth/logout'),
   getMe: () => api.get('/auth/me'),
 }
 
-// ... keep your novelApi, chapterApi, and feedApi exactly as they were
 export const novelApi = {
   getAll: () => api.get('/novels'),
   getOne: (id: string) => api.get(`/novels/${id}`),
@@ -56,6 +57,16 @@ export const chapterApi = {
 export const feedApi = {
   getFeed: (limit: number = 20, offset: number = 0) =>
     api.get(`/feed?limit=${limit}&offset=${offset}`),
+  getPost: (id: string) => api.get(`/feed/${id}`),
+  createPost: (data: any) => api.post('/feed', data),
+  likePost: (id: string) => api.post(`/feed/${id}/like`),
+  commentPost: (id: string, data: any) => api.post(`/feed/${id}/comments`, data),
+}
+
+export const adminApi = {
+  getUsers: () => api.get('/admin/users'),
+  updateUserRole: (userId: number, role: string) => api.put(`/admin/users/${userId}/role`, { role }),
+  deleteUser: (userId: number) => api.delete(`/admin/users/${userId}`),
 }
 
 export { api }

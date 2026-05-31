@@ -248,8 +248,6 @@ export function FullScreenEditor() {
       </div>
     </div>
   );
-}
-
 /* ══════════════════════════════════════════════════════════════════════════════
    PHASE 3 — Lorebook Quick List Component (embedded in left sidebar)
    ══════════════════════════════════════════════════════════════════════════════ */
@@ -286,4 +284,8 @@ function LorebookQuickList({ projectId }: { projectId: number }) {
       )}
     </div>
   );
+}
+
+
+
 }
